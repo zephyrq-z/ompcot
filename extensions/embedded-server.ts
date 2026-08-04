@@ -103,7 +103,7 @@ function buildHomeDirCandidates(): string[] {
 function resolveOmpAgentRoot(): string {
   // Prefer whichever home candidate already has .omp/agent on disk.
   for (const home of buildHomeDirCandidates()) {
-    const candidate = path.join(home, ".pi", "agent");
+    const candidate = path.join(home, ".omp", "agent");
     if (fs.existsSync(candidate)) return candidate;
   }
 
@@ -115,7 +115,7 @@ function resolveOmpAgentRoot(): string {
   }
 
   const home = buildHomeDirCandidates()[0] || "~";
-  return path.join(home, ".pi", "agent");
+  return path.join(home, ".omp", "agent");
 }
 
 const OMP_AGENT_ROOT = resolveOmpAgentRoot();
@@ -513,7 +513,7 @@ export default function (omp: ExtensionAPI) {
   // `session_shutdown` and the new instance's `session_start`; callers
   // must treat that as "no active session".
   function currentOMP(): ExtensionAPI | null {
-    return globalState.getApi?.() ?? null;
+    return globalState.getAomp?.() ?? null;
   }
 
   // ═══════════════════════════════════════
@@ -755,8 +755,8 @@ export default function (omp: ExtensionAPI) {
     // Get model info
     const model = ctx.model;
     const aomp = currentOMP();
-    const thinkingLevel = api?.getThinkingLevel() ?? "off";
-    const sessionName = api?.getSessionName() ?? "";
+    const thinkingLevel = aomp?.getThinkingLevel() ?? "off";
+    const sessionName = aomp?.getSessionName() ?? "";
     const sessionFile = ctx.sessionManager.getSessionFile();
 
     // Context usage
@@ -799,8 +799,8 @@ export default function (omp: ExtensionAPI) {
     // …). Returning a clean error here is cheaper than letting the call
     // throw `"This extension ctx is stale after session replacement"` and
     // having oh-my-omp re-emit it as an `extension_error` event in chat.
-    const requireAomp = (cmd: string): ExtensionAPI | null => {
-      if (api) return aomp;
+    const requireApi = (cmd: string): ExtensionAPI | null => {
+      if (aomp) return aomp;
       sendTo(ws, error(cmd, "No active session"));
       return null;
     };
@@ -943,10 +943,10 @@ export default function (omp: ExtensionAPI) {
           const model = ctx.model;
           const state = {
             model,
-            thinkingLevel: api?.getThinkingLevel() ?? "off",
+            thinkingLevel: aomp?.getThinkingLevel() ?? "off",
             isStreaming: !ctx.isIdle(),
             sessionFile: ctx.sessionManager.getSessionFile(),
-            sessionName: api?.getSessionName() ?? "",
+            sessionName: aomp?.getSessionName() ?? "",
             autoCompactionEnabled: true, // Extension can't easily check this
           };
           sendTo(ws, success("get_state", state));
