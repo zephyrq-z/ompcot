@@ -677,56 +677,75 @@ impl OmpManager {
         ))
     }
 
-    /// Parse `omp list` output and extract package sources.
+    /// List installed package sources via `omp plugin list --json`.
+    ///
+    /// omp 17 removed the top-level `omp list` command, so the previous
+    /// text-scraping implementation always failed with
+    /// ``error: `omp list` is not a top-level command``. The JSON payload is:
+    ///
+    /// ```json
+    /// { "npm": [{ "name": "pkg", "version": "1.0.0", ... }],
+    ///   "marketplace": [{ "id": "pkg", "scope": "user", ... }] }
+    /// ```
+    ///
+    /// npm entries are reported as `npm:<name>` so they match the source
+    /// strings the browse UI builds in `browseSourceFor`; marketplace
+    /// entries are reported by bare id.
     pub fn list_configured_package_sources(&self) -> Result<Vec<String>, String> {
-        let args = vec!["list".to_string()];
+        let args = vec![
+            "plugin".to_string(),
+            "list".to_string(),
+            "--json".to_string(),
+        ];
         let output = self.run_pi_command(&args)?;
+        let parsed: serde_json::Value = serde_json::from_str(output.trim())
+            .map_err(|e| format!("Failed to parse `omp plugin list --json` output: {}", e))?;
+
         let mut sources = Vec::new();
-        for line in output.lines() {
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            if trimmed.eq_ignore_ascii_case("No packages installed.") {
-                continue;
-            }
-            if trimmed.ends_with(':') {
-                continue;
-            }
-            if let Some(rest) = trimmed.strip_prefix('-') {
-                let value = rest.trim();
-                if !value.is_empty() {
-                    sources.push(value.to_string());
+        if let Some(entries) = parsed.get("npm").and_then(serde_json::Value::as_array) {
+            for entry in entries {
+                if let Some(name) = entry.get("name").and_then(serde_json::Value::as_str) {
+                    sources.push(format!("npm:{}", name));
                 }
-                continue;
             }
-            // `omp list` currently emits entries prefixed with two spaces.
-            if let Some(value) = trimmed.strip_prefix("npm:") {
-                sources.push(format!("npm:{}", value));
-                continue;
-            }
-            if let Some(value) = trimmed.strip_prefix("git:") {
-                sources.push(format!("git:{}", value));
-                continue;
-            }
-            if trimmed.starts_with('/') || trimmed.starts_with("./") || trimmed.starts_with("../") {
-                sources.push(trimmed.to_string());
+        }
+        if let Some(entries) = parsed
+            .get("marketplace")
+            .and_then(serde_json::Value::as_array)
+        {
+            for entry in entries {
+                if let Some(id) = entry.get("id").and_then(serde_json::Value::as_str) {
+                    sources.push(id.to_string());
+                }
             }
         }
         Ok(sources)
     }
 
     pub fn install_package_source(&self, source: &str) -> Result<(), String> {
-        let args = vec!["install".to_string(), source.to_string()];
+        let args = vec!["install".to_string(), strip_source_scheme(source).to_string()];
         let _ = self.run_pi_command(&args)?;
         Ok(())
     }
 
+    /// omp has no top-level `remove` command — unknown arguments are treated
+    /// as a prompt, so the previous implementation started an agent turn
+    /// instead of uninstalling anything.
     pub fn remove_package_source(&self, source: &str) -> Result<(), String> {
-        let args = vec!["remove".to_string(), source.to_string()];
+        let args = vec![
+            "plugin".to_string(),
+            "uninstall".to_string(),
+            strip_source_scheme(source).to_string(),
+        ];
         let _ = self.run_pi_command(&args)?;
         Ok(())
     }
+}
+
+/// The UI addresses npm packages as `npm:<name>` (see `browseSourceFor` in
+/// `public/app.js`); omp's CLI expects the bare spec.
+fn strip_source_scheme(source: &str) -> &str {
+    source.strip_prefix("npm:").unwrap_or(source)
 }
 
 pub fn is_port_in_use(port: u16) -> bool {
